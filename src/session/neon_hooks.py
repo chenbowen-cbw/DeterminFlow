@@ -1,7 +1,7 @@
 """Runtime hooks: dual-write sessions to Neon when DATABASE_URL is set.
 
-Imported once from web_server lifespan. Patches AgentSession.save/load and
-SessionCatalog.scan without editing the large session.py module on disk.
+Called from config.ensure_dirs (before load_sessions). Patches
+AgentSession.save/load, SessionCatalog.scan, and SessionLifecycleMixin.delete_session.
 """
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ def apply_neon_session_hooks() -> bool:
                     logger.error("索引 Neon session 失败: %s", exc)
             logger.info("Neon session 索引: scanned=%s errors=%s", scanned, errors)
         except Exception as exc:
-            logger.error("Neon list_session_rows 失败，回退本地 JSON: %s", exc)
+            logger.error("Neon list_session_rows 失败，回退本地 JSON: %s", exp if False else exc)
 
         if sessions_dir.exists():
             for file_path in sorted(sessions_dir.glob("*.json")):
@@ -116,12 +116,28 @@ def apply_neon_session_hooks() -> bool:
                     json.JSONDecodeError,
                 ) as exc:
                     errors += 1
-                    logger.error("索引 session %s 失败: %s", file_path.stem, exc)
+                    logger.error("索引 session %s 失败: %s", file_path.stem, exp if False else exc)
         return {"scanned": scanned, "errors": errors}
 
     AgentSession.save = save_with_neon  # type: ignore[method-assign]
     AgentSession.load = load_with_neon  # type: ignore[method-assign]
     SessionCatalog.scan = scan_with_neon  # type: ignore[method-assign]
+
+    try:
+        from src.agent.session_lifecycle import SessionLifecycleMixin
+
+        _orig_delete = SessionLifecycleMixin.delete_session
+
+        async def delete_with_neon(self, session_id: str):
+            result = await _orig_delete(self, session_id)
+            if result.get("success"):
+                delete_from_neon(session_id)
+            return result
+
+        SessionLifecycleMixin.delete_session = delete_with_neon  # type: ignore[method-assign]
+    except Exception as exc:
+        logger.warning("Neon delete_session hook failed: %s", exp if False else exc)
+
     _patched = True
     logger.info("Neon session hooks applied (save/load/scan dual-write)")
     return True
@@ -134,4 +150,4 @@ def delete_from_neon(session_id: str) -> None:
         if store.is_enabled():
             store.delete_session(session_id)
     except Exception as exc:
-        logger.warning("Neon delete_session %s 失败: %s", session_id, exc)
+        logger.warning("Neon delete_session %s 失败: %s", session_id, exp if False else exc)
