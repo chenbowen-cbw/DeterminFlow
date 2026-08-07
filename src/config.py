@@ -16,9 +16,14 @@ logger = logging.getLogger(__name__)
 # 项目根目录（从 src/ 回溯到项目根）
 BASE_DIR = Path(__file__).parent.parent
 
+# Vercel / 其他 Serverless 环境：包目录只读，把可写数据放到 /tmp
+_ON_VERCEL = os.environ.get("VERCEL") == "1" or os.environ.get("VERCEL_ENV") is not None
+_DEFAULT_DATA = "/tmp/determinflow-data" if _ON_VERCEL else str(BASE_DIR / "data")
+_DEFAULT_LOGS = "/tmp/determinflow-logs" if _ON_VERCEL else str(BASE_DIR / "logs")
+
 # 运行数据可重定向，便于测试实例、容器和多环境隔离。
-DATA_DIR = Path(get_determinflow_env("DATA_DIR", str(BASE_DIR / "data"))).expanduser().resolve()
-LOGS_DIR = Path(get_determinflow_env("LOGS_DIR", str(BASE_DIR / "logs"))).expanduser().resolve()
+DATA_DIR = Path(get_determinflow_env("DATA_DIR", _DEFAULT_DATA)).expanduser().resolve()
+LOGS_DIR = Path(get_determinflow_env("LOGS_DIR", _DEFAULT_LOGS)).expanduser().resolve()
 CONFIG_DIR = Path(get_determinflow_env("CONFIG_DIR", str(BASE_DIR / "config"))).expanduser().resolve()
 SKILLS_DIR = DATA_DIR / "skills"
 RULES_DIR = DATA_DIR / "rules"
@@ -150,17 +155,26 @@ SHOW_SYSTEM_PROMPT_TAB = _get_bool_config("SHOW_SYSTEM_PROMPT_TAB", False)
 
 def ensure_dirs():
     """确保运行目录存在，并补齐缺失的 Core 内置资源。"""
-    DATA_DIR.mkdir(exist_ok=True)
-    LOGS_DIR.mkdir(exist_ok=True)
-    CONFIG_DIR.mkdir(exist_ok=True)
-    SESSIONS_DIR.mkdir(exist_ok=True)
-    SKILLS_DIR.mkdir(exist_ok=True)
-    RULES_DIR.mkdir(exist_ok=True)
-    SCRIPT_LIBRARY_DIR.mkdir(exist_ok=True)
-    PLUGINS_DIR.mkdir(exist_ok=True)
-    WORKFLOWS_DIR.mkdir(exist_ok=True)
-    WORKFLOW_WORKSPACES_DIR.mkdir(exist_ok=True)
-    provision_core_skills(SKILLS_DIR)
+    for d in (
+        DATA_DIR,
+        LOGS_DIR,
+        CONFIG_DIR,
+        SESSIONS_DIR,
+        SKILLS_DIR,
+        RULES_DIR,
+        SCRIPT_LIBRARY_DIR,
+        PLUGINS_DIR,
+        WORKFLOWS_DIR,
+        WORKFLOW_WORKSPACES_DIR,
+    ):
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning("无法创建目录 %s: %s", d, exc)
+    try:
+        provision_core_skills(SKILLS_DIR)
+    except OSError as exc:
+        logger.warning("provision_core_skills 失败: %s", exc)
 
 
 # ============================================================

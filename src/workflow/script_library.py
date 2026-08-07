@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import Any, Callable
 
 from src.config import SCRIPT_LIBRARY_DIR
 from src.extension_api.registrar import OwnedPath
+
+logger = logging.getLogger(__name__)
 
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 SCRIPT_LIBRARY_ATTESTATION_SCHEMA = "script_library_attestation.v1"
@@ -53,7 +56,16 @@ class ScriptLibraryCatalog:
         self.owner_enabled = owner_enabled or (lambda owner: True)
         self.owner_environment = owner_environment or (lambda owner: {})
         self.owner_revision = owner_revision or (lambda _owner: None)
-        self.user_root.mkdir(parents=True, exist_ok=True)
+        try:
+            self.user_root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # Serverless (e.g. Vercel) has a read-only package filesystem.
+            # Defer directory creation; later writable paths should use /tmp.
+            logger.warning(
+                "Script Library user_root 无法创建（只读文件系统？）: %s — %s",
+                self.user_root,
+                exc,
+            )
         self._scan()
 
     @staticmethod
@@ -86,6 +98,9 @@ class ScriptLibraryCatalog:
         for root in self._roots(include_inactive=include_inactive):
             root_path = root.path.resolve()
             if not root_path.exists():
+                # On read-only / missing roots (serverless cold start), skip instead of crashing import.
+                if root.owner == "user":
+                    continue
                 raise FileNotFoundError(
                     f"Script Library 根目录不存在: {root.owner}: {root_path}"
                 )
