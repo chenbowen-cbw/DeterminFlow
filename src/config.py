@@ -198,11 +198,11 @@ def ensure_dirs():
         try:
             d.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            logger.warning("无法创建目录 %s: %s", d, exp)
+            logger.warning("无法创建目录 %s: %s", d, exc)
     try:
         provision_core_skills(SKILLS_DIR)
     except OSError as exc:
-        logger.warning("provision_core_skills 失败: %s", exp)
+        logger.warning("provision_core_skills 失败: %s", exc)
 
 
 # ============================================================

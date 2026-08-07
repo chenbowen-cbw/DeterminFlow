@@ -2,6 +2,7 @@
 多供应商模型管理器 - 管理 DeepSeek、MiMo 等供应商的配置
 
 配置存储在 config/models_config.json，API Key 优先从环境变量解析。
+Serverless (Vercel/Lambda): 只读文件系统时 save() 仅记日志，配置保留在内存，不抛异常。
 """
 import json
 import logging
@@ -228,28 +229,39 @@ class ModelManager:
         return changed
 
     def _create_default_config(self) -> Dict:
-        """从版本化模板创建本地模型配置。"""
+        """从版本化模板创建本地模型配置。
+
+        Serverless / 只读文件系统上 save() 会失败，但配置仍保留在内存中，
+        保证 Web 服务可以正常启动。
+        """
         with _DEFAULT_CONFIG_TEMPLATE.open("r", encoding="utf-8") as handle:
             self.config = json.load(handle)
-        self.save()
+        self.save()  # 只读环境下不会抛异常
         return self.config
 
     def save(self):
-        """保存配置到 JSON 文件（原子写入：tmp + os.replace）"""
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.config_path.with_suffix('.json.tmp')
+        """保存配置到 JSON 文件（原子写入：tmp + os.replace）
+
+        Vercel / Lambda 等只读文件系统：仅记录警告，配置保留在内存，
+        绝不抛出异常，避免 lifespan 启动失败。
+        """
+        tmp_path = self.config_path.with_suffix(".json.tmp")
         try:
-            with open(tmp_path, 'w', encoding='utf-8') as f:
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=2, ensure_ascii=False)
             os.replace(str(tmp_path), str(self.config_path))
         except (IOError, OSError) as e:
-            logger.error(f"保存模型配置失败: {self.config_path} | {e}")
-            # 清理残留临时文件
+            logger.warning(
+                "保存模型配置失败（只读或 serverless 环境，配置仅保存在内存）: %s | %s",
+                self.config_path,
+                e,
+            )
             try:
                 tmp_path.unlink(missing_ok=True)
             except OSError:
                 pass
-            raise
+            # 不 re-raise：允许服务在 Vercel 上正常启动
 
     def get_provider(self, provider_id: str) -> Optional[Dict]:
         """获取供应商配置"""
