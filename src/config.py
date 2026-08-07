@@ -135,7 +135,8 @@ CODING_TOOLS_ENABLED = _get_bool_config("CODING_TOOLS_ENABLED", True)
 CODING_PATH_SANDBOX_ENABLED = _get_bool_config("CODING_PATH_SANDBOX_ENABLED", False)
 if os.getenv("CODING_WORKSPACE_BASE"):
     CODING_WORKSPACE_BASE = os.environ["CODING_WORKSPACE_BASE"]
-elif determinflow_env_is_set("DATA_DIR"):
+elif determinflow_env_is_set("DATA_DIR") or _ON_VERCEL:
+    # On Vercel / when DATA_DIR is explicitly set, keep workspaces under DATA_DIR
     CODING_WORKSPACE_BASE = str(DATA_DIR / "workspaces")
 else:
     CODING_WORKSPACE_BASE = _get_config_value("CODING_WORKSPACE_BASE", "data/workspaces")
