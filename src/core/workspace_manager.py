@@ -18,6 +18,34 @@ import src.config as config
 
 logger = logging.getLogger(__name__)
 
+_TMP_FALLBACK = Path("/tmp/determinflow-data/workspaces")
+
+
+def _resolve_workspace_root(base_dir: str | Path | None = None) -> Path:
+    """Resolve workspace root, preferring absolute CODING_WORKSPACE_BASE / DATA_DIR.
+
+    On serverless (Vercel/Lambda) the package FS under /var/task is read-only;
+    always land under a writable location (typically /tmp).
+    """
+    if base_dir is not None:
+        root = Path(base_dir).expanduser()
+    else:
+        cwb = Path(config.CODING_WORKSPACE_BASE).expanduser()
+        if cwb.is_absolute():
+            root = cwb
+        else:
+            root = config.BASE_DIR / cwb
+
+    root = root.resolve()
+
+    # Hard guard: never use the read-only Lambda/Vercel package root
+    if str(root).startswith("/var/task") or getattr(config, "_ON_SERVERLESS", False):
+        if not str(root).startswith("/tmp"):
+            preferred = Path(getattr(config, "WORKFLOW_WORKSPACES_DIR", None) or (config.DATA_DIR / "workspaces"))
+            root = preferred.resolve()
+
+    return root
+
 
 def resolve_workflow_workspace_path(
     workflow_id: str,
@@ -27,11 +55,7 @@ def resolve_workflow_workspace_path(
 ) -> Path:
     """Purely resolve a Workflow workspace path without creating it."""
     safe_workflow_id = WorkspaceManager._sanitize_id(workflow_id)
-    workspace_root = (
-        Path(base_dir).expanduser().resolve()
-        if base_dir is not None
-        else (config.BASE_DIR / config.CODING_WORKSPACE_BASE).resolve()
-    )
+    workspace_root = _resolve_workspace_root(base_dir)
     default_path = workspace_root / safe_workflow_id
 
     override_path = override.strip() if override else ""
@@ -44,6 +68,7 @@ def resolve_workflow_workspace_path(
             config.BASE_DIR.resolve(),
             config.DATA_DIR.resolve(),
             workspace_root,
+            _TMP_FALLBACK.resolve(),
         )
         if not any(resolved.is_relative_to(root) for root in allowed_roots):
             logger.error(
@@ -82,11 +107,23 @@ class WorkspaceManager:
         Args:
             base_dir: Workspace 存储根目录，默认从配置读取
         """
-        if base_dir:
-            self.base_dir = Path(base_dir)
-        else:
-            self.base_dir = config.BASE_DIR / config.CODING_WORKSPACE_BASE
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.base_dir = _resolve_workspace_root(base_dir)
+
+        try:
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # Serverless / read-only package FS — fall back to /tmp
+            logger.warning(
+                "WorkspaceManager base_dir mkdir 失败 (%s): %s — 回退到 %s",
+                self.base_dir,
+                exp,
+                _TMP_FALLBACK,
+            )
+            self.base_dir = _TMP_FALLBACK
+            try:
+                self.base_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc2:
+                logger.error("即使 /tmp fallback 也失败: %s", exp2)
 
         # Session → workspace 路径映射（chat 场景）
         self._workspaces: dict[str, Path] = {}
@@ -108,6 +145,22 @@ class WorkspaceManager:
             raise ValueError(f"无效的 ID（清洗后为空）: {raw_id!r}")
         return safe
 
+    def _safe_mkdir(self, path: Path) -> Path:
+        """mkdir with read-only FS tolerance; returns the path that was used."""
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        except OSError as exc:
+            logger.warning("mkdir 失败 %s: %s", path, exp)
+            if str(path).startswith("/var/task"):
+                alt = _TMP_FALLBACK / path.name
+                try:
+                    alt.mkdir(parents=True, exist_ok=True)
+                    return alt
+                except OSError:
+                    pass
+            raise
+
     # ============================================================
     # Chat session workspace（data/workspaces/{session_id}）
     # ============================================================
@@ -123,8 +176,7 @@ class WorkspaceManager:
             新创建的 workspace 路径: base_dir/{session_id}
         """
         session_id = self._sanitize_id(session_id)
-        workspace_dir = self.base_dir / session_id
-        workspace_dir.mkdir(parents=True, exist_ok=True)
+        workspace_dir = self._safe_mkdir(self.base_dir / session_id)
 
         if source_path:
             source = Path(source_path)
@@ -211,8 +263,7 @@ class WorkspaceManager:
             workflow_root: base_dir/{workflow_id}/
         """
         workflow_id = self._sanitize_id(workflow_id)
-        workflow_root = self.base_dir / workflow_id
-        workflow_root.mkdir(parents=True, exist_ok=True)
+        workflow_root = self._safe_mkdir(self.base_dir / workflow_id)
         logger.info(f"Workflow workspace 已创建: {workflow_root}")
         return workflow_root
 
@@ -244,7 +295,7 @@ class WorkspaceManager:
         else:
             raise ValueError(f"不支持的 Main 任务工作空间模式: {mode}")
 
-        workspace.mkdir(parents=True, exist_ok=True)
+        workspace = self._safe_mkdir(workspace)
         logger.info(
             "Main task workspace 已创建: session=%s task=%s mode=%s path=%s",
             safe_session_id,
@@ -285,7 +336,7 @@ class WorkspaceManager:
             override=override,
             base_dir=self.base_dir,
         )
-        ws_path.mkdir(parents=True, exist_ok=True)
+        ws_path = self._safe_mkdir(ws_path)
         if override and override.strip():
             logger.info("Workflow workspace (override): %s", ws_path)
         return ws_path

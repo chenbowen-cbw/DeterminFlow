@@ -16,10 +16,20 @@ logger = logging.getLogger(__name__)
 # 项目根目录（从 src/ 回溯到项目根）
 BASE_DIR = Path(__file__).parent.parent
 
-# Vercel / 其他 Serverless 环境：包目录只读，把可写数据放到 /tmp
-_ON_VERCEL = os.environ.get("VERCEL") == "1" or os.environ.get("VERCEL_ENV") is not None
-_DEFAULT_DATA = "/tmp/determinflow-data" if _ON_VERCEL else str(BASE_DIR / "data")
-_DEFAULT_LOGS = "/tmp/determinflow-logs" if _ON_VERCEL else str(BASE_DIR / "logs")
+# Vercel / AWS Lambda / 其他 Serverless：包目录只读，把可写数据放到 /tmp
+# Vercel Python 运行在 Lambda 上，常见信号：VERCEL=1、LAMBDA_TASK_ROOT=/var/task、BASE_DIR 在 /var/task 下
+_ON_SERVERLESS = (
+    os.environ.get("VERCEL") == "1"
+    or os.environ.get("VERCEL_ENV") is not None
+    or os.environ.get("AWS_LAMBDA_FUNCTION_NAME") is not None
+    or os.environ.get("LAMBDA_TASK_ROOT") is not None
+    or str(BASE_DIR).startswith("/var/task")
+)
+# 向后兼容旧变量名
+_ON_VERCEL = _ON_SERVERLESS
+
+_DEFAULT_DATA = "/tmp/determinflow-data" if _ON_SERVERLESS else str(BASE_DIR / "data")
+_DEFAULT_LOGS = "/tmp/determinflow-logs" if _ON_SERVERLESS else str(BASE_DIR / "logs")
 
 # 运行数据可重定向，便于测试实例、容器和多环境隔离。
 DATA_DIR = Path(get_determinflow_env("DATA_DIR", _DEFAULT_DATA)).expanduser().resolve()
@@ -133,13 +143,28 @@ LANGGRAPH_RECURSION_LIMIT = _get_int_config("LANGGRAPH_RECURSION_LIMIT", 25)
 
 CODING_TOOLS_ENABLED = _get_bool_config("CODING_TOOLS_ENABLED", True)
 CODING_PATH_SANDBOX_ENABLED = _get_bool_config("CODING_PATH_SANDBOX_ENABLED", False)
+
+# Workspace 根目录：Serverless 上强制落在可写的 DATA_DIR（通常 /tmp），避免 /var/task 只读崩溃
 if os.getenv("CODING_WORKSPACE_BASE"):
-    CODING_WORKSPACE_BASE = os.environ["CODING_WORKSPACE_BASE"]
-elif determinflow_env_is_set("DATA_DIR") or _ON_VERCEL:
-    # On Vercel / when DATA_DIR is explicitly set, keep workspaces under DATA_DIR
-    CODING_WORKSPACE_BASE = str(DATA_DIR / "workspaces")
+    _cwb_raw = os.environ["CODING_WORKSPACE_BASE"]
+elif determinflow_env_is_set("DATA_DIR") or _ON_SERVERLESS:
+    _cwb_raw = str(DATA_DIR / "workspaces")
 else:
-    CODING_WORKSPACE_BASE = _get_config_value("CODING_WORKSPACE_BASE", "data/workspaces")
+    _cwb_raw = str(_get_config_value("CODING_WORKSPACE_BASE", "data/workspaces"))
+
+_cwb_path = Path(_cwb_raw).expanduser()
+if not _cwb_path.is_absolute():
+    _cwb_path = (BASE_DIR / _cwb_path).resolve()
+else:
+    _cwb_path = _cwb_path.resolve()
+
+# 若解析结果仍落在只读包目录（/var/task），强制改到 DATA_DIR
+if _ON_SERVERLESS or str(_cwb_path).startswith("/var/task"):
+    if not str(_cwb_path).startswith("/tmp"):
+        _cwb_path = (DATA_DIR / "workspaces").resolve()
+
+CODING_WORKSPACE_BASE = str(_cwb_path)
+
 CODING_CMD_MODE = _get_config_value("CODING_CMD_MODE", "whitelist")
 CODING_CMD_BLACKLIST = _get_config_value("CODING_CMD_BLACKLIST", "rm -rf /,format,mkfs,dd if=")
 CODING_CMD_WHITELIST = _get_config_value("CODING_CMD_WHITELIST", "npm,node,python,pip,git,ls,cat,echo,cd,mkdir,cp,mv")
@@ -167,15 +192,16 @@ def ensure_dirs():
         PLUGINS_DIR,
         WORKFLOWS_DIR,
         WORKFLOW_WORKSPACES_DIR,
+        Path(CODING_WORKSPACE_BASE),
     ):
         try:
             d.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            logger.warning("无法创建目录 %s: %s", d, exc)
+            logger.warning("无法创建目录 %s: %s", d, exp)
     try:
         provision_core_skills(SKILLS_DIR)
     except OSError as exc:
-        logger.warning("provision_core_skills 失败: %s", exc)
+        logger.warning("provision_core_skills 失败: %s", exp)
 
 
 # ============================================================
