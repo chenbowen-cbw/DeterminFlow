@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd web && npm ci && npm run build",
+  "installCommand": "pip install -r requirements.lock",
+  "functions": {
+    "src/web_server.py": {
+      "maxDuration": 300
+    }
+  }
+}
