@@ -134,4 +134,4 @@ def delete_from_neon(session_id: str) -> None:
         if store.is_enabled():
             store.delete_session(session_id)
     except Exception as exc:
-        logger.warning("Neon delete_session %s 失败: %s", session_id, exp if False else exc)
+        logger.warning("Neon delete_session %s 失败: %s", session_id, exc)
