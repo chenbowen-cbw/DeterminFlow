@@ -33,6 +33,7 @@ dependencies = [
   "aiofiles==25.1.0",
   "gunicorn==26.0.0",
   "httpx==0.28.1",
+  "psycopg[binary]==3.3.2",
 ]
 
 [project.optional-dependencies]

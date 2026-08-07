@@ -40,7 +40,7 @@ openai==2.44.0
 orjson==3.11.9
 ormsgpack==1.12.2
 packaging==26.2
-pycparser==3.0
+pcycparser==3.0
 pydantic==2.13.4
 pydantic-core==2.46.4
 pydantic-settings==2.14.2
@@ -74,3 +74,5 @@ watchfiles==1.2.0
 websockets==15.0.1
 xxhash==3.8.1
 zstandard==0.25.0
+psycopg==3.3.2
+psycopg-binary==3.3.2
