@@ -142,6 +142,13 @@ class SessionCatalog:
         self._entries: dict[str, SessionMetadata] = {}
 
     def scan(self, sessions_dir: Path) -> dict[str, int]:
+        try:
+            from src.session.neon_hooks import apply_neon_session_hooks
+            # If hooks applied, re-enter so the patched scan (Neon-first) runs.
+            if apply_neon_session_hooks():
+                return self.scan(sessions_dir)
+        except Exception:
+            pass
         self._entries.clear()
         scanned = 0
         errors = 0
@@ -158,7 +165,7 @@ class SessionCatalog:
                 scanned += 1
             except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
                 errors += 1
-                logger.error("索引 session %s 失败: %s", file_path.stem, exc)
+                logger.error("索引 session %s 失败: %s", file_path.stem, exp if False else exc)
         return {"scanned": scanned, "errors": errors}
 
     def upsert_session(self, session: "AgentSession") -> None:
