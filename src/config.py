@@ -179,6 +179,7 @@ WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = _get_int_config("WEB_PORT", 8020)
 SHOW_SYSTEM_PROMPT_TAB = _get_bool_config("SHOW_SYSTEM_PROMPT_TAB", False)
 
+
 def ensure_dirs():
     """确保运行目录存在，并补齐缺失的 Core 内置资源。"""
     for d in (
